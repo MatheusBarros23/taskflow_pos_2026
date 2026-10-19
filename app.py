@@ -89,7 +89,7 @@ def login():
             session["user_id"] = user["id"]
             session["username"] = user["username"]
             return redirect(url_for("tasks"))
-        error = "Usuario ou senha invalidos."
+        error = "Usuário ou senha inválidos. Tente novamente."
 
     return render_template("login.html", error=error)
 
