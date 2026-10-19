@@ -1,0 +1,5 @@
+target-version = "py312"
+extend-exclude = ["codigo"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "S"]

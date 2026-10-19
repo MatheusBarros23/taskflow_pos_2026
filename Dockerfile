@@ -1,29 +1,39 @@
-# Dockerfile INSEGURO - linha de base usada no Modulo 2 (Hardening).
-# Cada comentario "# FALHA" indica uma pratica que sera corrigida
-# durante a aula de hardening de containers.
+# syntax=docker/dockerfile:1
 
-# FALHA 1: tag "latest" nao fixada -> build nao reprodutivel e pode
-# puxar uma imagem base com vulnerabilidades novas sem aviso.
-FROM python:latest
-#FROM python:3.12-slim
+# FALHA 1: base minima (slim) fixada por tag e digest.
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 
-# FALHA 2: executando como root (nenhum USER definido).
-WORKDIR /app
-
+FROM ${PYTHON_IMAGE} AS build
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+RUN python -m venv /opt/venv
 COPY requirements.txt .
+# FALHA 3: versoes fixadas no requirements.txt e sem cache de download.
+RUN /opt/venv/bin/pip install -r requirements.txt \
+    && /opt/venv/bin/pip uninstall -y pip
 
-# FALHA 3: nenhuma verificacao de integridade / hash das dependencias.
-RUN pip install -r requirements.txt
+FROM ${PYTHON_IMAGE} AS runtime
+# FALHA 2: usuario dedicado nao-root, com UID fixo.
+RUN groupadd --system --gid 10001 taskflow \
+    && useradd --system --uid 10001 --gid taskflow --home-dir /app --shell /usr/sbin/nologin taskflow \
+    && pip uninstall -y pip \
+    && mkdir -p /app/data \
+    && chown taskflow:taskflow /app/data
 
-COPY . .
+COPY --from=build /opt/venv /opt/venv
+WORKDIR /app
+COPY --chown=root:root app.py .
+COPY --chown=root:root templates/ templates/
 
-# FALHA 4: segredo passado como ARG/ENV fica gravado nas camadas
-# da imagem e pode ser extraido com "docker history".
-ENV ADMIN_PASSWORD=admin123
+# FALHA 4: nenhum segredo em ENV/ARG; TASKFLOW_SECRET_KEY e
+# TASKFLOW_ADMIN_PASSWORD sao injetados em runtime.
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TASKFLOW_DB=/app/data/taskflow.db
 
-# FALHA 5: expondo a porta do servidor de desenvolvimento do Flask,
-# que nao e apto para producao.
-EXPOSE 5000
+USER 10001
+EXPOSE 8000
 
-# FALHA 6: container roda com debug habilitado e como root.
-CMD ["python", "app.py"]
+# FALHAS 5 e 6: gunicorn em vez do servidor de dev do Flask, sem debug.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--preload", "--no-control-socket", "app:app"]
