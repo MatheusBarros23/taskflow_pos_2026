@@ -36,7 +36,7 @@ export TASKFLOW_ADMIN_PASSWORD="escolha-uma-senha"
 python app.py
 ```
 
-## Executar com Docker
+## Executar com Docker.   
 
 ```bash
 docker build -t taskflow:hardened .
