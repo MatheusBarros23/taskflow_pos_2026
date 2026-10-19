@@ -1,58 +1,55 @@
-# TaskFlow (App de Exemplo) — Disciplina DevSecOps
+# TaskFlow — Esteira Segura (DevSecOps)
 
-Esta é a aplicação de laboratório usada em **todos os encontros práticos** da
-disciplina. É um gerenciador de tarefas (to-do list) simples em Python/Flask,
-propositalmente vulnerável, que evolui ao longo do curso
+Gerenciador de tarefas em Flask, criado a partir da TaskFlow vulnerável da disciplina (`codigo/app-exemplo/`) e protegido por uma esteira de CI que funciona como quality gate da `main`.
 
-## ⚠️ Aviso importante
+## Esteira
 
-Este código contém vulnerabilidades **intencionais** para fins didáticos
-(ver comentários `# FALHA` e docstring no topo de `app.py`). Nunca:
+| Workflow | Job (required check) | Gate |
+|----------|----------------------|------|
+| `ci.yml` | `Lint (ruff)` | `ruff check` + `ruff format --check` |
+| `ci.yml` | `Build e Trivy` | `docker build` + `trivy image` (HIGH/CRITICAL com correção) + `trivy config` |
+| `sast.yml` | `Semgrep` | `p/python`, `p/flask`, `p/security-audit` com `--error` |
+| `sast.yml` | `Gitleaks` | Histórico completo (`fetch-depth: 0`) |
+| `sca.yml` | `pip-audit` | `pip-audit -r requirements.txt --strict` |
 
-- Use este código como referência de boas práticas.
-- Implante esta aplicação em ambiente de produção ou exposto à internet.
-- Reutilize o padrão de código (concatenação de SQL, senhas em texto puro,
-  segredo hardcoded) em projetos reais.
+O Dependabot (`.github/dependabot.yml`) monitora pip, a imagem base Docker e as GitHub Actions.
+Todas as actions estão fixadas por SHA, e as imagens de ferramentas por digest.
 
-## Como executar localmente
+## Correções no código
+
+- **SQL Injection:** login e busca usam queries parametrizadas.
+- **`SECRET_KEY`:** lida de `TASKFLOW_SECRET_KEY`; a app não sobe sem ela.
+- **Senhas:** armazenadas com `generate_password_hash`; o usuário `admin` só é criado se `TASKFLOW_ADMIN_PASSWORD` estiver definida.
+- **XSS:** HTML renderizado por templates Jinja com autoescape.
+- **`/debug/info`:** removido.
+- **`debug=True`:** removido; a imagem roda com gunicorn.
+
+O hardening do container está em [docs/hardening.md](docs/hardening.md).
+
+## Executar localmente
 
 ```bash
-cd app-exemplo
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: venv\Scripts\activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+export TASKFLOW_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+export TASKFLOW_ADMIN_PASSWORD="escolha-uma-senha"
 python app.py
 ```
 
-A aplicação sobe em `http://localhost:5000`. Usuários de teste já vêm
-cadastrados no banco SQLite (`taskflow.db`, criado automaticamente):
-
-| Usuário | Senha    |
-|---------|----------|
-| admin   | admin123 |
-| aluno   | senha123 |
-
-## Como executar com Docker
+## Executar com Docker
 
 ```bash
-cd app-exemplo
-docker build -t taskflow:vuln .
-docker run -p 5000:5000 taskflow:vuln
+docker build -t taskflow:hardened .
+export TASKFLOW_SECRET_KEY=... TASKFLOW_ADMIN_PASSWORD=...
+./scripts/docker-run-seguro.sh
 ```
 
 ## Estrutura
 
 ```
-app-exemplo/
-├── app.py              # Aplicação Flask (versão vulnerável, linha de base)
-├── requirements.txt    # Dependências com CVEs conhecidas (uso proposital)
-├── Dockerfile           # Dockerfile inseguro (uso no Módulo 2 - Hardening)
-└── README.md            # Este arquivo
+app.py, templates/        Aplicação corrigida
+Dockerfile                Imagem hardened
+.github/workflows/        ci.yml, sast.yml, sca.yml
+docs/hardening.md         Trivy e docker history, antes × depois
+codigo/                   Material de referência da disciplina (fora do scan SAST/lint)
 ```
-
-Cada módulo cria, dentro da sua própria pasta `codigo/`, uma cópia ou um
-patch desta aplicação demonstrando o "antes" (vulnerável) e o "depois"
-(corrigido) referente ao tema daquele encontro.
-
-
-Teste PR parte - 2

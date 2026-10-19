@@ -1,70 +1,65 @@
-# =============================================================================
-# Workflow de exemplo: SAST (Semgrep) + Secret Scanning (Gitleaks)
-#
-# COMO USAR:
-#   Copie este arquivo para ".github/workflows/sast.yml" na raiz do seu
-#   repositório (o GitHub só reconhece workflows dentro dessa pasta exata).
-#
-# O QUE ELE FAZ:
-#   1. Roda o Semgrep contra o código-fonte Python usando rulesets públicos
-#      focados em Python/Flask/segurança geral.
-#   2. Roda o Gitleaks contra todo o histórico do repositório para detectar
-#      segredos (chaves, tokens, senhas) commitados.
-#   3. Falha o job (exit code != 0) se qualquer uma das ferramentas encontrar
-#      um problema, o que bloqueia o merge do Pull Request se o repositório
-#      tiver "branch protection" configurada para exigir o check verde.
-#
-# Este é o "caminho simples" descrito no Encontro 6: falhar o job e ler o
-# log do próprio GitHub Actions. Uma evolução possível (mencionada na aula,
-# não implementada aqui para não aumentar a complexidade) é publicar os
-# achados em formato SARIF na aba "Security > Code Scanning" do GitHub.
-# =============================================================================
-
-name: SAST e Secret Scanning
+name: SAST
 
 on:
-  push:
-    branches: ["**"]
   pull_request:
-    branches: ["**"]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  SEMGREP_VERSION: "1.181.0"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 
 jobs:
   semgrep:
-    name: SAST - Semgrep
+    name: Semgrep
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout do código
-        uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Instalar Semgrep
-        run: pip install semgrep
+        run: pip install "semgrep==${SEMGREP_VERSION}"
 
-      - name: Rodar Semgrep (rulesets Python + Flask + auditoria de segurança)
+      - name: Semgrep scan
         run: |
           semgrep scan \
             --config=p/python \
             --config=p/flask \
             --config=p/security-audit \
+            --metrics=off \
             --error
-        # --error faz o Semgrep retornar exit code != 0 quando há findings,
-        # o que automaticamente marca este step (e o job) como "failed".
 
   gitleaks:
-    name: Secret Scanning - Gitleaks
+    name: Gitleaks
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout do código (histórico completo)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # fetch-depth 0 traz todo o histórico de commits, não só o
-          # último commit. Segredos podem ter sido commitados e removidos
-          # depois - eles continuam vivos no histórico do Git!
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Rodar Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          # Em repositórios públicos gratuitos a action funciona sem
-          # necessidade de licença. GITHUB_TOKEN já é fornecido
-          # automaticamente pelo GitHub Actions.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Instalar Gitleaks (checksum verificado)
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum --check --strict
+          tar -xzf "$tarball" gitleaks
+
+      - name: Gitleaks (historico completo)
+        run: ./gitleaks git . --redact --verbose --exit-code 1
