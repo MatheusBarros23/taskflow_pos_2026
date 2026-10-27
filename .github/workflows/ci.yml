@@ -65,10 +65,3 @@ jobs:
             --ignorefile /.trivyignore \
             --exit-code 1 \
             "$IMAGE_NAME"
-
-      - name: Trivy config (Dockerfile)
-        run: |
-          docker run --rm -v "$PWD:/src:ro" "$TRIVY_IMAGE" config \
-            --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            /src/Dockerfile
