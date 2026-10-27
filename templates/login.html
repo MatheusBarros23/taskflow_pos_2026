@@ -1,7 +1,19 @@
-<h1>TaskFlow - Login</h1>
-<form method="post">
-    Usuario: <input type="text" name="username"><br>
-    Senha: <input type="password" name="password"><br>
-    <input type="submit" value="Entrar">
-</form>
-<p style="color:red">{{ error or "" }}</p>
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8">
+    <title>TaskFlow - Login</title>
+</head>
+<body>
+    <h1>TaskFlow - Login</h1>
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        Usuario: <input type="text" name="username"><br>
+        Senha: <input type="password" name="password"><br>
+        <input type="submit" value="Entrar">
+    </form>
+    {% if error %}
+    <p><strong>{{ error }}</strong></p>
+    {% endif %}
+</body>
+</html>

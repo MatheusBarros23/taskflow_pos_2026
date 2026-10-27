@@ -1,6 +1,16 @@
-<h1>Nova tarefa</h1>
-<form method="post">
-    Titulo: <input type="text" name="title"><br>
-    Descricao: <textarea name="description"></textarea><br>
-    <input type="submit" value="Salvar">
-</form>
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8">
+    <title>TaskFlow - Nova tarefa</title>
+</head>
+<body>
+    <h1>Nova tarefa</h1>
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        Titulo: <input type="text" name="title"><br>
+        Descricao: <textarea name="description"></textarea><br>
+        <input type="submit" value="Salvar">
+    </form>
+</body>
+</html>

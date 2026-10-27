@@ -1,9 +1,20 @@
 """TaskFlow - gerenciador de tarefas (versao corrigida da linha de base do curso)."""
 
+import hmac
 import os
+import secrets
 import sqlite3
 
-from flask import Flask, g, redirect, render_template, request, session, url_for
+from flask import (
+    Flask,
+    abort,
+    g,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -14,8 +25,27 @@ if not _secret_key:
 app.config["SECRET_KEY"] = _secret_key
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# Atras de TLS em producao, defina TASKFLOW_COOKIE_SECURE=true.
+app.config["SESSION_COOKIE_SECURE"] = (
+    os.environ.get("TASKFLOW_COOKIE_SECURE", "false").lower() == "true"
+)
 
 DATABASE = os.environ.get("TASKFLOW_DB", "taskflow.db")
+
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'none'; style-src 'self'; img-src 'self'; "
+        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+    "Cache-Control": "no-store",
+}
 
 
 def get_db():
@@ -62,6 +92,31 @@ def init_db():
             ("admin", generate_password_hash(admin_password)),
         )
     db.commit()
+
+
+def csrf_token():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_urlsafe(32)
+    return session["csrf_token"]
+
+
+app.jinja_env.globals["csrf_token"] = csrf_token
+
+
+@app.before_request
+def check_csrf():
+    if request.method == "POST":
+        expected = session.get("csrf_token", "")
+        received = request.form.get("csrf_token", "")
+        if not expected or not hmac.compare_digest(expected, received):
+            abort(400)
+
+
+@app.after_request
+def set_security_headers(response):
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
 
 
 @app.route("/")
@@ -118,7 +173,9 @@ def tasks():
             "SELECT * FROM tasks WHERE user_id = ?", (session["user_id"],)
         ).fetchall()
 
-    return render_template("tasks.html", rows=rows, username=session["username"])
+    return render_template(
+        "tasks.html", rows=rows, search=search, username=session["username"]
+    )
 
 
 @app.route("/tasks/new", methods=["GET", "POST"])
@@ -145,4 +202,6 @@ with app.app_context():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    # Debug so liga com FLASK_DEBUG=true; o padrao e desligado.
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    app.run(host="127.0.0.1", port=5000, debug=debug)
