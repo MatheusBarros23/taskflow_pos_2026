@@ -1,9 +1,11 @@
 """TaskFlow - gerenciador de tarefas (versao corrigida da linha de base do curso)."""
 
 import os
-import sqlite3
+import time
 
+import psycopg2
 from flask import Flask, g, redirect, render_template, request, session, url_for
+from psycopg2.extras import RealDictCursor
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -15,14 +17,25 @@ app.config["SECRET_KEY"] = _secret_key
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
-DATABASE = os.environ.get("TASKFLOW_DB", "taskflow.db")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("Variavel de ambiente DATABASE_URL nao definida.")
+
+
+def connect(retries=1, delay=2):
+    for attempt in range(1, retries + 1):
+        try:
+            return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        except psycopg2.OperationalError:
+            if attempt == retries:
+                raise
+            time.sleep(delay)
 
 
 def get_db():
     db = getattr(g, "_database", None)
     if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
+        db = g._database = connect()
     return db
 
 
@@ -33,35 +46,41 @@ def close_connection(exception):
         db.close()
 
 
+def query(sql, params=(), one=False):
+    with get_db().cursor() as cur:
+        cur.execute(sql, params)
+        return cur.fetchone() if one else cur.fetchall()
+
+
 def init_db():
-    db = get_db()
-    db.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        );
+    db = g._database = connect(retries=10)
+    with db, db.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            );
 
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT,
-            done INTEGER DEFAULT 0,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        );
-        """
-    )
-
-    # Usuario inicial so e criado se a senha vier do ambiente.
-    admin_password = os.environ.get("TASKFLOW_ADMIN_PASSWORD")
-    if admin_password:
-        db.execute(
-            "INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)",
-            ("admin", generate_password_hash(admin_password)),
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users (id),
+                title TEXT NOT NULL,
+                description TEXT,
+                done BOOLEAN NOT NULL DEFAULT FALSE
+            );
+            """
         )
-    db.commit()
+
+        # Usuario inicial so e criado se a senha vier do ambiente.
+        admin_password = os.environ.get("TASKFLOW_ADMIN_PASSWORD")
+        if admin_password:
+            cur.execute(
+                "INSERT INTO users (username, password) VALUES (%s, %s) "
+                "ON CONFLICT (username) DO NOTHING",
+                ("admin", generate_password_hash(admin_password)),
+            )
 
 
 @app.route("/")
@@ -78,11 +97,7 @@ def login():
         username = request.form["username"]
         password = request.form["password"]
 
-        user = (
-            get_db()
-            .execute("SELECT * FROM users WHERE username = ?", (username,))
-            .fetchone()
-        )
+        user = query("SELECT * FROM users WHERE username = %s", (username,), one=True)
 
         if user and check_password_hash(user["password"], password):
             session.clear()
@@ -106,17 +121,14 @@ def tasks():
         return redirect(url_for("login"))
 
     search = request.args.get("q", "")
-    db = get_db()
 
     if search:
-        rows = db.execute(
-            "SELECT * FROM tasks WHERE user_id = ? AND title LIKE ?",
+        rows = query(
+            "SELECT * FROM tasks WHERE user_id = %s AND title LIKE %s",
             (session["user_id"], f"%{search}%"),
-        ).fetchall()
+        )
     else:
-        rows = db.execute(
-            "SELECT * FROM tasks WHERE user_id = ?", (session["user_id"],)
-        ).fetchall()
+        rows = query("SELECT * FROM tasks WHERE user_id = %s", (session["user_id"],))
 
     return render_template("tasks.html", rows=rows, username=session["username"])
 
@@ -130,14 +142,20 @@ def new_task():
         title = request.form["title"]
         description = request.form["description"]
         db = get_db()
-        db.execute(
-            "INSERT INTO tasks (user_id, title, description) VALUES (?, ?, ?)",
-            (session["user_id"], title, description),
-        )
-        db.commit()
+        with db, db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tasks (user_id, title, description) VALUES (%s, %s, %s)",
+                (session["user_id"], title, description),
+            )
         return redirect(url_for("tasks"))
 
     return render_template("new_task.html")
+
+
+@app.route("/healthz")
+def healthz():
+    query("SELECT 1", one=True)
+    return {"status": "ok"}
 
 
 with app.app_context():
