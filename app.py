@@ -1,15 +1,22 @@
 """TaskFlow - gerenciador de tarefas (versao corrigida da linha de base do curso)."""
 
 import hmac
+import json
+import logging
 import os
 import secrets
+import sys
 import time
+import uuid
+from datetime import UTC, datetime
+from logging.handlers import WatchedFileHandler
 
 import psycopg2
 from flask import (
     Flask,
     abort,
     g,
+    has_request_context,
     redirect,
     render_template,
     request,
@@ -18,6 +25,69 @@ from flask import (
 )
 from psycopg2.extras import RealDictCursor
 from werkzeug.security import check_password_hash, generate_password_hash
+
+
+class JsonFormatter(logging.Formatter):
+    # Allowlist: so estes campos chegam ao log. Formulario, senha, cookie e
+    # token nunca sao passados, entao nao ha como vazarem por engano.
+    FIELDS = (
+        "event",
+        "request_id",
+        "ip",
+        "method",
+        "path",
+        "status",
+        "duration_ms",
+        "user_id",
+        "username",
+        "reason",
+        "task_id",
+        "count",
+        "has_search",
+    )
+
+    def format(self, record):
+        entry = {
+            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(
+                timespec="milliseconds"
+            ),
+            "level": record.levelname.lower(),
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for field in self.FIELDS:
+            value = getattr(record, field, None)
+            if value is not None:
+                entry[field] = value
+        if record.exc_info:
+            entry["exc"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=False)
+
+
+def setup_logging():
+    logger = logging.getLogger("taskflow")
+    logger.setLevel(os.environ.get("TASKFLOW_LOG_LEVEL", "INFO").upper())
+    logger.propagate = False
+    handlers = [logging.StreamHandler(sys.stdout)]
+    # Arquivo lido pelo Promtail; WatchedFileHandler e seguro com varios workers.
+    log_file = os.environ.get("TASKFLOW_LOG_FILE")
+    if log_file:
+        handlers.append(WatchedFileHandler(log_file, encoding="utf-8"))
+    for handler in handlers:
+        handler.setFormatter(JsonFormatter())
+        logger.addHandler(handler)
+    return logger
+
+
+log = setup_logging()
+
+
+def log_event(event, level=logging.INFO, **fields):
+    if has_request_context():
+        fields.setdefault("request_id", g.get("request_id"))
+        fields.setdefault("ip", request.remote_addr)
+    log.log(level, event, extra={"event": event, **fields})
+
 
 app = Flask(__name__)
 
@@ -124,11 +194,27 @@ app.jinja_env.globals["csrf_token"] = csrf_token
 
 
 @app.before_request
+def start_request():
+    g.request_id = uuid.uuid4().hex
+    g.started = time.perf_counter()
+
+
+@app.before_request
+def reject_nul_bytes():
+    # O Postgres nao aceita NUL em texto; sem isso a requisicao vira erro 500.
+    values = list(request.args.values()) + list(request.form.values())
+    if any("\x00" in value for value in values):
+        log_event("invalid_input", logging.WARNING, path=request.path)
+        abort(400)
+
+
+@app.before_request
 def check_csrf():
     if request.method == "POST":
         expected = session.get("csrf_token", "")
         received = request.form.get("csrf_token", "")
         if not expected or not hmac.compare_digest(expected, received):
+            log_event("csrf_rejected", logging.WARNING, path=request.path)
             abort(400)
 
 
@@ -136,6 +222,21 @@ def check_csrf():
 def set_security_headers(response):
     for header, value in SECURITY_HEADERS.items():
         response.headers.setdefault(header, value)
+    response.headers["X-Request-ID"] = g.get("request_id", "")
+    return response
+
+
+@app.after_request
+def log_request(response):
+    if request.path != "/healthz":
+        log_event(
+            "http_request",
+            logging.ERROR if response.status_code >= 500 else logging.INFO,
+            method=request.method,
+            path=request.path,
+            status=response.status_code,
+            duration_ms=round((time.perf_counter() - g.started) * 1000, 1),
+        )
     return response
 
 
@@ -159,7 +260,14 @@ def login():
             session.clear()
             session["user_id"] = user["id"]
             session["username"] = user["username"]
+            log_event("login_success", user_id=user["id"], username=user["username"])
             return redirect(url_for("tasks"))
+        log_event(
+            "login_failure",
+            logging.WARNING,
+            username=username[:64],
+            reason="bad_password" if user else "unknown_user",
+        )
         error = "Usuário ou senha inválidos. Tente novamente."
 
     return render_template("login.html", error=error)
@@ -167,6 +275,7 @@ def login():
 
 @app.route("/logout")
 def logout():
+    log_event("logout", user_id=session.get("user_id"))
     session.clear()
     return redirect(url_for("login"))
 
@@ -186,6 +295,12 @@ def tasks():
     else:
         rows = query("SELECT * FROM tasks WHERE user_id = %s", (session["user_id"],))
 
+    log_event(
+        "tasks_listed",
+        user_id=session["user_id"],
+        count=len(rows),
+        has_search=bool(search),
+    )
     return render_template(
         "tasks.html", rows=rows, search=search, username=session["username"]
     )
@@ -202,9 +317,12 @@ def new_task():
         db = get_db()
         with db, db.cursor() as cur:
             cur.execute(
-                "INSERT INTO tasks (user_id, title, description) VALUES (%s, %s, %s)",
+                "INSERT INTO tasks (user_id, title, description) "
+                "VALUES (%s, %s, %s) RETURNING id",
                 (session["user_id"], title, description),
             )
+            task_id = cur.fetchone()["id"]
+        log_event("task_created", user_id=session["user_id"], task_id=task_id)
         return redirect(url_for("tasks"))
 
     return render_template("new_task.html")

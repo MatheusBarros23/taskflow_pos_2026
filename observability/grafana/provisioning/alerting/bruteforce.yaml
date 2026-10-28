@@ -1,0 +1,40 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: taskflow-seguranca
+    folder: TaskFlow
+    interval: 1m
+    rules:
+      - uid: taskflow-login-bruteforce
+        title: Forca bruta no login
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: high
+          team: taskflow
+        annotations:
+          summary: "Mais de 10 falhas de login do IP {{ $labels.ip }} em 5 minutos"
+          runbook_url: docs/runbook-login-bruteforce.md
+        data:
+          - refId: A
+            datasourceUid: loki
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              refId: A
+              queryType: instant
+              expr: 'sum by (ip) (count_over_time({app="taskflow", event="login_failure"} | json [5m]))'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [10]
