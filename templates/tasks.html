@@ -1,15 +1,24 @@
-<h1>Minhas tarefas ({{ username }})</h1>
-<form method="get">
-    <input type="text" name="q" placeholder="buscar tarefa">
-    <input type="submit" value="Buscar">
-</form>
-<ul>
-{% for row in rows %}
-    <li>
-        <b>{{ row["title"] }}</b> - {{ row["description"] or "" }}
-        {% if row["done"] %}(feita){% endif %}
-    </li>
-{% endfor %}
-</ul>
-<a href="{{ url_for('new_task') }}">Nova tarefa</a> |
-<a href="{{ url_for('logout') }}">Sair</a>
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8">
+    <title>TaskFlow - Minhas tarefas</title>
+</head>
+<body>
+    <h1>Minhas tarefas ({{ username }})</h1>
+    <form method="get">
+        <input type="text" name="q" value="{{ search }}" placeholder="buscar tarefa">
+        <input type="submit" value="Buscar">
+    </form>
+    <ul>
+    {% for row in rows %}
+        <li>
+            <b>{{ row["title"] }}</b> - {{ row["description"] or "" }}
+            {% if row["done"] %}(feita){% endif %}
+        </li>
+    {% endfor %}
+    </ul>
+    <a href="{{ url_for('new_task') }}">Nova tarefa</a> |
+    <a href="{{ url_for('logout') }}">Sair</a>
+</body>
+</html>

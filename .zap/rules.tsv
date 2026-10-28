@@ -1,0 +1,66 @@
+# Regras do ZAP (formato: id<TAB>ACAO<TAB>nome). Usado por zap-baseline.py e zap-full-scan.py.
+#
+# Politica do gate (.github/workflows/dast.yml): o job FALHA com qualquer saida
+# diferente de 0, ou seja, tanto FAIL (exit 1) quanto WARN (exit 2) quebram o build.
+# Regra nao listada aqui permanece WARN e, portanto, tambem bloqueia o merge.
+# Por isso so ha IGNORE com justificativa; nenhuma regra de injecao ou de
+# cabecalho foi rebaixada.
+#
+# --- Regras elevadas a FAIL (o que nunca pode voltar) ---------------------------
+# OWASP A03:2021 Injection
+40012	FAIL	Cross Site Scripting (Reflected)
+40014	FAIL	Cross Site Scripting (Persistent)
+40026	FAIL	Cross Site Scripting (DOM Based)
+40018	FAIL	SQL Injection
+# OWASP A05:2021 Security Misconfiguration (cabecalhos de seguranca)
+10038	FAIL	Content Security Policy (CSP) Header Not Set
+10020	FAIL	Missing Anti-clickjacking Header
+10021	FAIL	X-Content-Type-Options Header Missing
+# OWASP A01:2021 Broken Access Control (CSRF)
+# 10202 e a regra passiva: formulario POST sem token. A 20012 (ativa) esta abaixo.
+10202	FAIL	Absence of Anti-CSRF Tokens
+#
+# --- Regras rebaixadas para IGNORE (cada uma justificada) -----------------------
+#
+# 10106 HTTP Only Site: o alvo do scan e http://127.0.0.1 dentro do runner, sem
+#   TLS por construcao. TLS e responsabilidade do proxy/ingress em producao, onde
+#   a app roda com TASKFLOW_COOKIE_SECURE=true. Nao ha o que corrigir na app.
+10106	IGNORE	HTTP Only Site
+#
+# 90027 Cookie Slack Detector: o scan injeta um cookie de sessao fixo (replacer)
+#   para ser autenticado. O proprio ZAP avisa que "remover o cookie nao tem
+#   efeito" porque o replacer o reinsere em toda requisicao. E artefato do
+#   metodo de autenticacao do teste, nao comportamento da app.
+90027	IGNORE	Cookie Slack Detector
+#
+# 20012 Anti-CSRF Tokens Check (regra ativa): reenvia o formulario de login com o
+#   token de outra sessao e compara as respostas. Como o cookie e fixado pelo
+#   replacer, as duas variantes recebem 400 e o ZAP conclui, por engano, que o
+#   token nao e validado. O controle real e verificado de forma deterministica
+#   no workflow (passo "Verificar CSRF e /debug/info"): POST sem token deve dar
+#   400. A regra passiva 10202 continua como FAIL acima.
+20012	IGNORE	Anti-CSRF Tokens Check
+#
+# 10111 Authentication Request Identified: informativo. O ZAP apenas reconhece o
+#   formulario de login (/login), que e justamente o que o teste usa para se
+#   autenticar. Nao e uma fraqueza.
+10111	IGNORE	Authentication Request Identified
+#
+# 10049 Non-Storable Content: informativo. A app envia "Cache-Control: no-store"
+#   em todas as respostas de proposito (paginas autenticadas nao devem ser
+#   cacheadas). O alerta so descreve esse comportamento desejado.
+10049	IGNORE	Non-Storable Content
+#
+# 10031 User Controllable HTML Element Attribute (Potential XSS): heuristica que
+#   marca todo valor de entrada que aparece num atributo HTML (aqui, "q" e
+#   "csrf_token" dentro de value="..."). Os atributos estao entre aspas e o
+#   Jinja escapa o valor. XSS real e coberto pelas regras ativas 40012, 40014 e
+#   40026, que estao em FAIL e foram comprovadas bloqueando o merge.
+10031	IGNORE	User Controllable HTML Element Attribute (Potential XSS)
+#
+# 2 Private IP Disclosure: o IP que o ZAP encontra e o do proprio runner, gravado
+#   nos payloads que o scan ativo envia e que a app armazena como tarefas (dado
+#   do usuario, devolvido escapado). A app nunca emite IP interno em cabecalho
+#   ou corpo; o cabecalho Server e o unico dado de infraestrutura e a regra
+#   10036 o cobre.
+2	IGNORE	Private IP Disclosure

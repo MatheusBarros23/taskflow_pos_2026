@@ -11,6 +11,7 @@ Gerenciador de tarefas em Flask, criado a partir da TaskFlow vulnerável da disc
 | `sast.yml` | `Semgrep` | `p/python`, `p/flask`, `p/security-audit` com `--error` |
 | `sast.yml` | `Gitleaks` | Histórico completo (`fetch-depth: 0`) |
 | `sca.yml` | `pip-audit` | `pip-audit -r requirements.txt --strict` |
+| `dast.yml` | `ZAP (DAST)` | Sobe a app no runner, espera `/login` e roda ZAP Baseline + Full Scan com `.zap/rules.tsv`; qualquer alerta bloqueia |
 | `iac-scan.yml` | `Terraform validate` | `terraform fmt -check` + `terraform validate` em `infra/` |
 | `iac-scan.yml` | `Compose validate` | `docker compose config` com o `.env.example` |
 | `iac-scan.yml` | `Checkov` | Terraform, Dockerfile e GitHub Actions |
@@ -32,9 +33,16 @@ Por isso o workflow roda em todo PR, o que também garante que o Dockerfile e os
 - **Senhas:** armazenadas com `generate_password_hash`; o usuário `admin` só é criado se `TASKFLOW_ADMIN_PASSWORD` estiver definida.
 - **XSS:** HTML renderizado por templates Jinja com autoescape.
 - **`/debug/info`:** removido.
-- **`debug=True`:** removido; a imagem roda com gunicorn.
+- **`debug=True`:** removido; `FLASK_DEBUG` controla o modo debug (desligado por padrão) e a imagem roda com gunicorn.
+- **CSRF e cabeçalhos:** token por sessão validado em todo `POST` e cabeçalhos de segurança (CSP, `X-Frame-Options`, `nosniff`, etc.) em toda resposta.
 
-O hardening do container está em [docs/hardening.md](docs/hardening.md).
+O hardening do container está em [docs/hardening.md](docs/hardening.md) e os achados do DAST (antes × depois, mapeados ao OWASP Top 10) em [docs/dast.md](docs/dast.md).
+
+## Como disparar o DAST
+
+O workflow `DAST` roda em todo PR para a `main`, em `push` na `main` e manualmente: **Actions → DAST → Run workflow**. Os relatórios HTML e JSON ficam no artefato `zap-reports`.
+
+Para rodar o scan na sua máquina, suba a app (`./scripts/docker-run-seguro.sh`) e use o ZAP 2.17.0 com `-c .zap/rules.tsv`, como no `dast.yml`.
 
 ## Infraestrutura como código (Módulo 5)
 
@@ -107,9 +115,11 @@ python app.py
 ```
 app.py, templates/        Aplicação corrigida
 Dockerfile                Imagem hardened
+.github/workflows/        ci.yml, sast.yml, sca.yml, dast.yml
+.zap/rules.tsv            Regras do ZAP, cada rebaixamento justificado
+docs/dast.md              Achados do ZAP antes × depois e mapeamento OWASP
 docker-compose.yml        Stack web + Postgres com redes isoladas
 infra/                    Terraform corrigido (S3 + security group)
-.github/workflows/        ci.yml, sast.yml, sca.yml, iac-scan.yml
 docs/hardening.md         Trivy e docker history, antes × depois
 codigo/                   Material de referência da disciplina (fora dos scans)
 ```

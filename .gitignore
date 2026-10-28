@@ -4,6 +4,7 @@ __pycache__/
 *.db
 .env
 .DS_Store
+zap-out/
 .terraform/
 *.tfstate
 *.tfstate.*
