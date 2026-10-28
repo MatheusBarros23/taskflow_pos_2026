@@ -3,8 +3,9 @@
 import hmac
 import os
 import secrets
-import sqlite3
+import time
 
+import psycopg2
 from flask import (
     Flask,
     abort,
@@ -15,10 +16,6 @@ from flask import (
     session,
     url_for,
 )
-import time
-
-import psycopg2
-from flask import Flask, g, redirect, render_template, request, session, url_for
 from psycopg2.extras import RealDictCursor
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -48,6 +45,7 @@ def connect(retries=1, delay=2):
             if attempt == retries:
                 raise
             time.sleep(delay)
+
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": (

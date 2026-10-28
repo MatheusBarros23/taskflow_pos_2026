@@ -15,8 +15,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: taskflow:dast
-  CONTAINER_NAME: taskflow-dast
   TARGET: http://127.0.0.1:8000
   ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.17.0@sha256:030d3df57735dacbb83464854758e674dd9ad01d79d12a129a8e58b1fd384238
 
@@ -30,19 +28,26 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build da imagem
-        run: docker build -t "$IMAGE_NAME" .
-
       # Segredos descartaveis, gerados so para este job (nao sao secrets do repo).
-      - name: Subir a TaskFlow no runner (mesmas flags do script de producao)
+      # O .env fica so no runner; ele esta no .gitignore e nunca e commitado.
+      - name: Subir a stack (app + Postgres) com docker compose
         run: |
           TASKFLOW_SECRET_KEY="$(openssl rand -hex 32)"
           TASKFLOW_ADMIN_PASSWORD="$(openssl rand -hex 16)"
+          POSTGRES_PASSWORD="$(openssl rand -hex 16)"
           echo "::add-mask::$TASKFLOW_SECRET_KEY"
           echo "::add-mask::$TASKFLOW_ADMIN_PASSWORD"
+          echo "::add-mask::$POSTGRES_PASSWORD"
           echo "TASKFLOW_ADMIN_PASSWORD=$TASKFLOW_ADMIN_PASSWORD" >> "$GITHUB_ENV"
-          export TASKFLOW_SECRET_KEY TASKFLOW_ADMIN_PASSWORD
-          ./scripts/docker-run-seguro.sh
+          cat > .env <<ENV
+          TASKFLOW_SECRET_KEY=$TASKFLOW_SECRET_KEY
+          TASKFLOW_ADMIN_PASSWORD=$TASKFLOW_ADMIN_PASSWORD
+          POSTGRES_USER=taskflow
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          POSTGRES_DB=taskflow
+          WEB_PORT=8000
+          ENV
+          docker compose up -d --build
 
       # Sem isso o ZAP atacaria o nada e o relatorio sairia "limpo".
       - name: Esperar a aplicacao responder em /login
@@ -56,7 +61,7 @@ jobs:
             sleep 2
           done
           echo "A aplicacao nao respondeu a tempo." >&2
-          docker logs "$CONTAINER_NAME" || true
+          docker compose logs || true
           exit 1
 
       - name: Verificar CSRF e /debug/info
@@ -120,4 +125,4 @@ jobs:
 
       - name: Encerrar a aplicacao
         if: always()
-        run: docker rm -f "$CONTAINER_NAME" || true
+        run: docker compose down -v || true
