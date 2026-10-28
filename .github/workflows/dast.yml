@@ -28,17 +28,20 @@ jobs:
         with:
           persist-credentials: false
 
-      # Segredos descartaveis, gerados so para este job (nao sao secrets do repo).
-      # O .env fica so no runner; ele esta no .gitignore e nunca e commitado.
+      # Segredos vem dos GitHub Secrets do repositorio (Settings > Secrets and
+      # variables > Actions). O .env fica so no runner e nunca e commitado.
       - name: Subir a stack (app + Postgres) com docker compose
+        env:
+          TASKFLOW_SECRET_KEY: ${{ secrets.TASKFLOW_SECRET_KEY }}
+          TASKFLOW_ADMIN_PASSWORD: ${{ secrets.TASKFLOW_ADMIN_PASSWORD }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
         run: |
-          TASKFLOW_SECRET_KEY="$(openssl rand -hex 32)"
-          TASKFLOW_ADMIN_PASSWORD="$(openssl rand -hex 16)"
-          POSTGRES_PASSWORD="$(openssl rand -hex 16)"
-          echo "::add-mask::$TASKFLOW_SECRET_KEY"
-          echo "::add-mask::$TASKFLOW_ADMIN_PASSWORD"
-          echo "::add-mask::$POSTGRES_PASSWORD"
+          for name in TASKFLOW_SECRET_KEY TASKFLOW_ADMIN_PASSWORD POSTGRES_PASSWORD GRAFANA_ADMIN_PASSWORD; do
+            [ -n "${!name}" ] || { echo "Secret $name nao cadastrado no repositorio." >&2; exit 1; }
+          done
           echo "TASKFLOW_ADMIN_PASSWORD=$TASKFLOW_ADMIN_PASSWORD" >> "$GITHUB_ENV"
+          umask 077
           cat > .env <<ENV
           TASKFLOW_SECRET_KEY=$TASKFLOW_SECRET_KEY
           TASKFLOW_ADMIN_PASSWORD=$TASKFLOW_ADMIN_PASSWORD
@@ -46,6 +49,7 @@ jobs:
           POSTGRES_PASSWORD=$POSTGRES_PASSWORD
           POSTGRES_DB=taskflow
           WEB_PORT=8000
+          GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
           ENV
           docker compose up -d --build
 

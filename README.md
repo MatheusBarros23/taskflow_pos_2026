@@ -2,6 +2,39 @@
 
 Gerenciador de tarefas em Flask, criado a partir da TaskFlow vulnerável da disciplina (`codigo/app-exemplo/`) e protegido por uma esteira de CI que funciona como quality gate da `main`.
 
+## Arquitetura
+
+```mermaid
+flowchart LR
+    user([Navegador]) -->|127.0.0.1:8000| web
+    analyst([Analista]) -->|127.0.0.1:3000| grafana
+
+    subgraph frontend [rede frontend]
+        web[web<br/>Flask + gunicorn]
+    end
+    subgraph backend [rede backend - internal]
+        db[(db<br/>Postgres 17)]
+    end
+    subgraph observability [rede observability - internal]
+        promtail[Promtail]
+        loki[(Loki)]
+    end
+    subgraph grafana_ui [rede grafana_ui]
+        grafana[Grafana]
+    end
+
+    web -->|SQL| db
+    web -->|grava JSON| logs[/volume app_logs/]
+    logs -->|leitura ro| promtail
+    promtail -->|push| loki
+    grafana -->|LogQL| loki
+```
+
+- **web** fica nas redes `frontend` (porta publicada em `127.0.0.1`) e `backend`.
+- **db** só existe na rede `backend`, que é `internal: true`: sem porta no host e sem internet.
+- **Observabilidade** (profile `observabilidade`): a app grava logs JSON num volume; o Promtail lê esse volume e envia ao Loki; o Grafana consulta o Loki. A app não fala com o Loki e ninguém monta o `docker.sock`. Loki e Promtail ficam numa rede interna; só o Grafana publica porta, em `127.0.0.1`.
+- Todos os serviços rodam com `read_only`, `cap_drop: ALL`, `no-new-privileges`, limites de CPU, memória e PIDs e usuário não-root.
+
 ## Esteira
 
 | Workflow | Job (required check) | Gate |
@@ -38,11 +71,44 @@ Por isso o workflow roda em todo PR, o que também garante que o Dockerfile e os
 
 O hardening do container está em [docs/hardening.md](docs/hardening.md) e os achados do DAST (antes × depois, mapeados ao OWASP Top 10) em [docs/dast.md](docs/dast.md).
 
-## Como disparar o DAST
+## Como disparar cada workflow
 
-O workflow `DAST` roda em todo PR para a `main`, em `push` na `main` e manualmente: **Actions → DAST → Run workflow**. Os relatórios HTML e JSON ficam no artefato `zap-reports`.
+Todos rodam sozinhos em todo PR para a `main` e em `push` na `main`. Para rodar manualmente: **Actions → (workflow) → Run workflow**.
 
-Para rodar o scan na sua máquina, suba a app (`./scripts/docker-run-seguro.sh`) e use o ZAP 2.17.0 com `-c .zap/rules.tsv`, como no `dast.yml`.
+| Workflow | Gatilhos | Saída |
+|----------|----------|-------|
+| `CI` (`ci.yml`) | PR, push na `main`, manual | Log do ruff e do Trivy |
+| `SAST` (`sast.yml`) | PR, push na `main`, manual | Achados do Semgrep e do Gitleaks no log |
+| `SCA` (`sca.yml`) | PR, push na `main`, manual e toda segunda às 9h UTC | Relatório do pip-audit no log |
+| `DAST` (`dast.yml`) | PR, push na `main`, manual | Artefato `zap-reports` (HTML e JSON) |
+| `IaC Scan` (`iac-scan.yml`) | PR, push na `main`, manual | Log do Terraform, Checkov e Trivy config |
+
+Pela linha de comando, com o GitHub CLI: `gh workflow run dast.yml --ref <branch>`.
+
+### Secrets do GitHub
+
+O DAST sobe a app com o `docker-compose.yml`, então precisa dos segredos. Eles ficam em **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Uso |
+|--------|-----|
+| `TASKFLOW_SECRET_KEY` | Assina as sessões do Flask |
+| `TASKFLOW_ADMIN_PASSWORD` | Senha do usuário `admin` (o DAST faz login com ela) |
+| `POSTGRES_PASSWORD` | Senha do Postgres |
+| `GRAFANA_ADMIN_PASSWORD` | Exigida pelo compose; o DAST não sobe o Grafana |
+
+Gere cada valor com `python3 -c "import secrets; print(secrets.token_hex(32))"`. O workflow para com erro se algum estiver faltando.
+
+### Proteção da `main`
+
+Em **Settings → Branches**, a `main` exige PR, revisão de code owner e estes checks: `Lint (ruff)`, `Build e Trivy`, `Semgrep`, `Gitleaks`, `pip-audit`, `ZAP (DAST)`, `Terraform validate`, `Compose validate`, `Checkov` e `Trivy config`.
+
+## Observabilidade e resposta a incidente (Módulo 6)
+
+- **Logs JSON** em `app.py`, com `request_id` por requisição e eventos de login (sucesso e falha, com IP), criação e listagem de tarefas, logout e CSRF rejeitado. Senha, formulário, cookie e token nunca entram no log: o formatter só grava campos de uma lista fixa.
+- **Grafana + Loki + Promtail** no `docker-compose.yml`, profile `observabilidade`, com dashboard e alerta de força bruta provisionados.
+- **Consultas LogQL** e prints do ataque: [docs/observabilidade.md](docs/observabilidade.md).
+- **Ataque de teste:** `./scripts/bruteforce.sh http://127.0.0.1:8000 admin 30` (só aceita alvo local).
+- **Runbook** com a condição de disparo e as 4 fases do NIST SP 800-61: [docs/runbook-login-bruteforce.md](docs/runbook-login-bruteforce.md).
 
 ## Infraestrutura como código (Módulo 5)
 
@@ -92,10 +158,11 @@ O `terraform validate` roda sem credenciais AWS (`init -backend=false`). Valores
 
 ```bash
 cp .env.example .env    # troque todos os valores
-docker compose up -d --build --wait
+docker compose up -d --build --wait                                  # app + Postgres
+docker compose --profile observabilidade up -d --build --wait        # + Grafana, Loki e Promtail
 ```
 
-A aplicação fica em `http://127.0.0.1:8000`, com login `admin` e a senha definida em `TASKFLOW_ADMIN_PASSWORD`.
+A aplicação fica em `http://127.0.0.1:8000`, com login `admin` e a senha definida em `TASKFLOW_ADMIN_PASSWORD`. O Grafana fica em `http://127.0.0.1:3000`, com `admin` e a senha de `GRAFANA_ADMIN_PASSWORD`.
 
 ## Executar localmente
 
@@ -115,11 +182,15 @@ python app.py
 ```
 app.py, templates/        Aplicação corrigida
 Dockerfile                Imagem hardened
-.github/workflows/        ci.yml, sast.yml, sca.yml, dast.yml
+.github/workflows/        ci.yml, sast.yml, sca.yml, dast.yml, iac-scan.yml
 .zap/rules.tsv            Regras do ZAP, cada rebaixamento justificado
-docs/dast.md              Achados do ZAP antes × depois e mapeamento OWASP
-docker-compose.yml        Stack web + Postgres com redes isoladas
+docker-compose.yml        web + Postgres; Grafana, Loki e Promtail no profile observabilidade
+observability/            Configuração do Loki, Promtail e Grafana (datasource, dashboard, alerta)
 infra/                    Terraform corrigido (S3 + security group)
+scripts/                  docker-run-seguro.sh e bruteforce.sh
 docs/hardening.md         Trivy e docker history, antes × depois
+docs/dast.md              Achados do ZAP antes × depois e mapeamento OWASP
+docs/observabilidade.md   Logs, consultas LogQL e prints do ataque
+docs/runbook-login-bruteforce.md  Resposta a incidente (NIST SP 800-61)
 codigo/                   Material de referência da disciplina (fora dos scans)
 ```

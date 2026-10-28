@@ -14,7 +14,9 @@ FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0
 # FALHA 2: usuario dedicado nao-root, com UID fixo.
 RUN groupadd --system --gid 10001 taskflow \
     && useradd --system --uid 10001 --gid taskflow --home-dir /app --shell /usr/sbin/nologin taskflow \
-    && pip uninstall -y pip
+    && pip uninstall -y pip \
+    && mkdir -p /app/logs \
+    && chown taskflow:taskflow /app/logs
 
 COPY --from=build /opt/venv /opt/venv
 WORKDIR /app

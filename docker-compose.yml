@@ -17,6 +17,9 @@ services:
       TASKFLOW_SECRET_KEY: ${TASKFLOW_SECRET_KEY:?defina no .env}
       TASKFLOW_ADMIN_PASSWORD: ${TASKFLOW_ADMIN_PASSWORD:?defina no .env}
       DATABASE_URL: postgresql://${POSTGRES_USER:?defina no .env}:${POSTGRES_PASSWORD:?defina no .env}@db:5432/${POSTGRES_DB:?defina no .env}
+      TASKFLOW_LOG_FILE: /app/logs/taskflow.log
+    volumes:
+      - app_logs:/app/logs
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
     networks: [frontend, backend]
@@ -63,10 +66,110 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- Observabilidade: docker compose --profile observabilidade up -d ---
+  # A app nao fala com o Loki: ela grava JSON no volume app_logs e o
+  # Promtail le esse volume (sem docker.sock).
+
+  loki:
+    <<: *hardening
+    image: grafana/loki:3.7.9@sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28
+    profiles: [observabilidade]
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    networks: [observability]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+          pids: 200
+    # Sem healthcheck: a imagem e distroless (sem shell nem cliente HTTP).
+
+  promtail:
+    <<: *hardening
+    image: grafana/promtail:3.6.11@sha256:a761cb834cfaeee29745440d4884d6748f0a08d8f68928db1d707018c1dcfbe9
+    profiles: [observabilidade]
+    user: "10001:10001"
+    command: ["-config.file=/etc/promtail/config.yaml"]
+    volumes:
+      - ./observability/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - app_logs:/var/log/taskflow:ro
+    # Posicoes em tmpfs: ao reiniciar, o Loki descarta as linhas repetidas.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /var/lib/promtail:rw,noexec,nosuid,size=1m,uid=10001,gid=10001
+    networks: [observability]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+          pids: 100
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9080 && printf 'GET /ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on: [loki]
+
+  grafana:
+    <<: *hardening
+    image: grafana/grafana:13.2.5@sha256:9f7aa1e1e3246aade5792d35a738049f7f32f89cd51d1956cf426a4e86268a84
+    profiles: [observabilidade]
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina no .env}
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_SECURITY_COOKIE_SAMESITE: strict
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      # Usa so os plugins que vem na imagem; nada e baixado em runtime.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
+      GF_LOG_MODE: console
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana-dashboards:ro
+      - grafana_data:/var/lib/grafana
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    networks: [observability, grafana_ui]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+          pids: 200
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on: [loki]
+
 networks:
   frontend: {}
   backend:
     internal: true
+  # Loki e Promtail sem saida para a internet; so o Grafana publica porta.
+  observability:
+    internal: true
+  grafana_ui: {}
 
 volumes:
   db_data:
+  app_logs:
+  loki_data:
+  grafana_data:

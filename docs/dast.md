@@ -5,7 +5,7 @@ Coleta feita em 2026-10-27 com ZAP 2.17.0, autenticado como `admin`.
 
 ## Como o gate funciona
 
-1. Builda a imagem e sobe a TaskFlow **no próprio runner**, com o mesmo `scripts/docker-run-seguro.sh` usado em produção (`--read-only`, `--cap-drop=ALL`, etc.). Os segredos são gerados com `openssl rand` só para o job e mascarados no log.
+1. Builda a imagem e sobe a TaskFlow com Postgres **no próprio runner**, com o mesmo `docker-compose.yml` do projeto (`read_only`, `cap_drop: ALL`, redes isoladas). Os segredos vêm dos **GitHub Secrets** do repositório e o GitHub os mascara no log.
 2. **Espera ativa** pelo `GET /login` (até 30 tentativas). Sem isso o ZAP atacaria o nada e o relatório sairia limpo.
 3. Verifica de forma determinística: `/debug/info` responde 404, `POST` sem token CSRF responde 400 e o login válido responde 302.
 4. Faz login, obtém o cookie de sessão e o injeta no ZAP (replacer), para que ele alcance `/tasks` e `/tasks/new`.
