@@ -62,9 +62,11 @@ COPY /opt/venv /opt/venv # buildkit
 RUN /bin/sh -c groupadd --system --gid 10001 taskflow && useradd ... && pip uninstall -y pip ...
 ```
 
+Saída coletada em 2026-10-19, antes da migração para Postgres. Depois dela, o Dockerfile perdeu o `ENV TASKFLOW_DB` e ganhou um `HEALTHCHECK` em `/healthz`; o restante das camadas é igual.
+
 ## Flags de runtime
 
-O `scripts/docker-run-seguro.sh` sobe o container com `--read-only`, `--tmpfs /tmp:noexec,nosuid`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, limites de memória e CPU e volume só para `/app/data`.
+O `docker-compose.yml` e o `scripts/docker-run-seguro.sh` sobem o container com `read_only`, `tmpfs /tmp` com `noexec,nosuid`, `cap_drop: ALL`, `no-new-privileges` e limites de CPU, memória e PIDs. Desde o Módulo 5 o banco é um Postgres separado (ver README), então a app não grava nada no próprio filesystem.
 Nessas condições a aplicação foi testada: login com hash, busca com tentativa de SQLi e XSS escapado.
 
 ## Como reproduzir

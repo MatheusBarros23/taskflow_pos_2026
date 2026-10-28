@@ -5,3 +5,10 @@ __pycache__/
 .env
 .DS_Store
 zap-out/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+crash.log

@@ -1,0 +1,72 @@
+name: taskflow
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+services:
+  web:
+    <<: *hardening
+    build: .
+    image: taskflow:compose
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8000}:8000"
+    environment:
+      TASKFLOW_SECRET_KEY: ${TASKFLOW_SECRET_KEY:?defina no .env}
+      TASKFLOW_ADMIN_PASSWORD: ${TASKFLOW_ADMIN_PASSWORD:?defina no .env}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?defina no .env}:${POSTGRES_PASSWORD:?defina no .env}@db:5432/${POSTGRES_DB:?defina no .env}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    networks: [frontend, backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+          pids: 100
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    <<: *hardening
+    image: postgres:17.9-alpine@sha256:c7526c0f6c3f30260a563d7bcf8ad778effac59a44f8ffa86678c35418338609
+    user: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?defina no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env}
+      POSTGRES_DB: ${POSTGRES_DB:?defina no .env}
+    # Sem "ports": o banco so e alcancavel pela rede interna backend.
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /var/run/postgresql:rw,noexec,nosuid,size=1m,mode=1777
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+          pids: 100
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+
+volumes:
+  db_data:
