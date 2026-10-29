@@ -13,7 +13,7 @@
     <ul>
     {% for row in rows %}
         <li>
-            <b>{{ row["title"] }}</b> - {{ row["description"] or "" }}
+            <b>{{ row["title"] }}</b> - {{ row["description"]|safe }}
             {% if row["done"] %}(feita){% endif %}
         </li>
     {% endfor %}
