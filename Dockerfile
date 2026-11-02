@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # FALHA 1: base minima (slim) fixada por tag e digest.
-FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS build
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS build
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 RUN python -m venv /opt/venv
@@ -10,7 +10,7 @@ COPY requirements.txt .
 RUN /opt/venv/bin/pip install -r requirements.txt \
     && /opt/venv/bin/pip uninstall -y pip
 
-FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS runtime
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS runtime
 # FALHA 2: usuario dedicado nao-root, com UID fixo.
 RUN groupadd --system --gid 10001 taskflow \
     && useradd --system --uid 10001 --gid taskflow --home-dir /app --shell /usr/sbin/nologin taskflow \
